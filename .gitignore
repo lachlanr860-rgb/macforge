@@ -1,0 +1,17 @@
+node_modules/
+dist/
+app/vendor/
+build/
+.dev/
+.freebuff/
+.cloud-attachments/
+app/AppIcon.iconset/
+app/AppIcon.icns
+app/*.pdb
+app/SkyrimSELauncher.exe
+.DS_Store
+.env
+.env.*
+!.env.example
+
+threads/

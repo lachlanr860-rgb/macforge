@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="MacForge: every Steam game installed in your bottles on one row. Pick one and it launches on a Wine layer the app owns."
+    />
+    <title>MacForge</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600&family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script type="module" src="/src/main.js"></script>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="aurora" aria-hidden="true">
+      <span class="blob blob-a"></span>
+      <span class="blob blob-b"></span>
+      <span class="blob blob-c"></span>
+    </div>
+    <div class="grain" aria-hidden="true"></div>
+
+    <header class="nav">
+      <a class="brand" href="#top">
+        <span class="mark" aria-hidden="true"></span>
+        <span class="brand-name">MacForge</span>
+        <span class="chip">1.0</span>
+      </a>
+      <div class="nav-right">
+        <div class="seg" aria-label="Bottles">
+          <span class="seg-item is-active"><i class="dot dot-mint"></i>2 bottles</span>
+          <span class="seg-item is-idle">Wine 11.19</span>
+        </div>
+        <span class="clock" id="clock">--:--</span>
+      </div>
+    </header>
+
+    <section class="home" id="home" aria-label="Your games">
+      <div class="home-bg" id="home-bg" aria-hidden="true"></div>
+      <div class="home-veil" aria-hidden="true"></div>
+
+      <div class="home-clip" id="home-clip" aria-hidden="true" hidden>
+        <video class="home-clip-video" id="home-clip-video" muted loop playsinline preload="auto"></video>
+        <p class="home-clip-status" id="home-clip-status">loading clip…</p>
+      </div>
+
+      <div class="home-top">
+        <p class="home-label">
+          <span class="home-dot" aria-hidden="true"></span>
+          MacForge
+          <span class="home-count" id="home-count">scanning…</span>
+          <button class="home-rescan" id="rescan" type="button">rescan</button>
+          <button class="home-rescan home-quit" id="quit" type="button" hidden>stop</button>
+        </p>
+        <p class="home-keys">
+          <kbd>←</kbd><kbd>→</kbd><span>browse</span>
+          <span class="sep">·</span>
+          <kbd>↵</kbd><span>play</span>
+        </p>
+      </div>
+
+      <div class="home-stage">
+        <p class="home-kind" id="stage-kind">Loading</p>
+        <h1 class="home-title" id="stage-title">Reading your bottles…</h1>
+        <p class="home-meta" id="stage-meta"></p>
+        <div class="home-actions">
+          <button class="btn btn-primary btn-play" id="stage-play" type="button" disabled>Play</button>
+          <a class="btn btn-ghost" href="#bottle-detail">Details</a>
+        </div>
+        <p class="home-status" id="stage-status" role="status" aria-live="polite"></p>
+      </div>
+
+      <div class="rail-wrap">
+        <div class="rail" id="rail" role="listbox" aria-label="Installed games"></div>
+      </div>
+    </section>
+
+    <section class="library" id="library" aria-label="Your Steam library">
+      <div class="library-inner">
+        <ul class="preflight" id="preflight" aria-label="Setup problems" hidden></ul>
+        <div class="migrate steam-setup" id="steam-setup" hidden>
+          <p class="migrate-text" id="steam-setup-text"></p>
+          <button class="btn btn-primary migrate-run" id="steam-setup-run" type="button">
+            Set up Steam
+          </button>
+        </div>
+        <div class="library-head">
+          <div>
+            <p class="eyebrow reveal">Your library</p>
+            <h2 class="library-title reveal">Everything you own, one press to install.</h2>
+            <p class="library-sub" id="library-sub" role="status" aria-live="polite">Reading Steam's library cache…</p>
+          </div>
+          <input
+            class="library-filter"
+            id="library-filter"
+            type="search"
+            placeholder="Filter by name"
+            aria-label="Filter your library"
+            autocomplete="off"
+          />
+        </div>
+        <ul class="library-list" id="library-list"></ul>
+        <div class="library-extras" id="library-extras" hidden></div>
+        <p class="library-note">
+          Hover a game to see a short clip from its store trailer.
+          Downloads and removals happen inside the bottle — Steam never shows a window.
+          Progress and speed update live while it installs, and a download can be paused,
+          resumed or cancelled from its row. A game's first run sometimes stops at a terms,
+          EULA or sign-in window of its own — accept it there once and later launches go
+          straight in.
+        </p>
+        <p class="library-note runtime-note" id="runtime-note" hidden></p>
+        <div class="migrate" id="migrate" hidden>
+          <p class="migrate-text" id="migrate-text"></p>
+          <button class="btn btn-primary migrate-run" id="migrate-run" type="button">
+            Move games off Whisky
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow reveal">own Wine layer · Windows 10 · ESync</p>
+          <h1 class="reveal">
+            <span class="serif">Your library</span>, running<br />
+            on Apple silicon.
+          </h1>
+          <p class="lede reveal">
+            A bottle of its own, DXVK on Metal, and a Steam client that actually
+            opens. No CrossOver, no Parallels, nothing paid.
+          </p>
+          <div class="cta reveal">
+            <button
+              class="btn btn-primary"
+              type="button"
+              data-copy="open -a MacForge"
+            >
+              Open MacForge
+              <svg viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3 8h9M8.5 4l4 4-4 4" />
+              </svg>
+            </button>
+            <a class="btn btn-ghost" href="#commands">Commands</a>
+          </div>
+          <p class="micro reveal">
+            Each button copies its command. This page never runs anything.
+          </p>
+        </div>
+
+        <aside class="glass live reveal">
+          <div class="glass-bar">
+            <span class="lights" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span class="glass-title">inside the bottle</span>
+            <span class="pill pill-mint">live</span>
+          </div>
+          <ul class="procs">
+            <li>
+              <span class="proc-name">steam.exe</span>
+              <span class="proc-pid">32186</span>
+              <span class="bar"><b style="width: 62%"></b></span>
+            </li>
+            <li>
+              <span class="proc-name">winedevice.exe</span>
+              <span class="proc-pid">32096</span>
+              <span class="bar"><b style="width: 14%"></b></span>
+            </li>
+            <li>
+              <span class="proc-name">winedevice.exe</span>
+              <span class="proc-pid">32102</span>
+              <span class="bar"><b style="width: 9%"></b></span>
+            </li>
+            <li>
+              <span class="proc-name">wineserver</span>
+              <span class="proc-pid">32090</span>
+              <span class="bar"><b style="width: 4%"></b></span>
+            </li>
+          </ul>
+          <div class="glass-foot">
+            <span>sampled from <code>ps</code> at build time</span>
+            <span class="mono">4 procs</span>
+          </div>
+        </aside>
+      </section>
+
+      <section class="bento" id="bottle-detail" aria-label="Bottle detail">
+        <article class="card span-5 reveal">
+          <p class="eyebrow">Runtime</p>
+          <h2 class="card-title">Wine 11.19</h2>
+          <p class="card-sub mono trunc">
+            ~/Library/Application Support/MacForge/runtime/wine-whiskywine-v4.8.5-beta.1
+          </p>
+          <dl class="specs">
+            <div><dt>Engine</dt><dd>Wine 11.19</dd></div>
+            <div><dt>Windows</dt><dd>10</dd></div>
+            <div><dt>Sync</dt><dd>ESync</dd></div>
+            <div><dt>Graphics</dt><dd>DXVK 2.7.1</dd></div>
+          </dl>
+          <div class="chips">
+            <span class="pill pill-mint">Own runtime</span>
+            <span class="pill">MoltenVK</span>
+            <span class="pill">DXVK on Metal</span>
+            <span class="pill pill-off">Virtual desktop</span>
+          </div>
+        </article>
+
+        <article class="card span-4 reveal">
+          <p class="eyebrow">Graphics path</p>
+          <div class="flow">
+            <span class="node">DX11</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="node node-accent">DXVK</span>
+            <span class="arrow" aria-hidden="true"></span>
+            <span class="node">Metal</span>
+          </div>
+          <p class="big-number">5,461<span class="unit">MB</span></p>
+          <p class="card-sub">Apple M1 · Metal 4 · Apple 7 family</p>
+          <p class="fine">
+            Steam's processes get spoofed as an NVIDIA GPU so the storefront stops
+            refusing to draw.
+          </p>
+        </article>
+
+        <article class="card span-3 reveal">
+          <p class="eyebrow">Disk</p>
+          <p class="big-number" id="disk-free">—</p>
+          <div class="meter meter-warn"><b id="disk-meter" style="width: 0%"></b></div>
+          <p class="card-sub" id="disk-caption">reading this Mac's disk…</p>
+          <p class="fine">
+            Steam and its games live on the bottle's drive. Worth clearing space
+            before the next install.
+          </p>
+        </article>
+
+        <article class="card span-7 card-game reveal">
+          <p class="eyebrow">Steam, headless</p>
+          <div class="art" aria-hidden="true">
+            <span class="star s1"></span><span class="star s2"></span>
+            <span class="star s3"></span><span class="star s4"></span>
+            <span class="moon"></span>
+            <span class="peak p1"></span>
+            <span class="peak p2"></span>
+            <span class="peak p3"></span>
+            <span class="art-mist"></span>
+            <span class="art-word">Steam</span>
+            <span class="art-sub">no window</span>
+          </div>
+          <dl class="specs specs-row">
+            <div><dt>Client</dt><dd>in the bottle</dd></div>
+            <div><dt>Installs</dt><dd>silent</dd></div>
+            <div><dt>Progress</dt><dd>live</dd></div>
+            <div><dt>Clips</dt><dd>store trailers</dd></div>
+          </dl>
+        </article>
+
+        <article class="card span-5" id="commands">
+          <div class="card-head">
+            <p class="eyebrow">On disk</p>
+            <span class="mono note">this app</span>
+          </div>
+          <div class="term">
+            <div class="term-row">
+              <code><span class="prompt">$</span>open "$HOME/Library/Application Support/MacForge/Bottles"</code>
+              <button class="copy" data-copy="open &quot;$HOME/Library/Application Support/MacForge/Bottles&quot;" aria-label="Copy bottles folder command">copy</button>
+            </div>
+            <div class="term-row">
+              <code><span class="prompt">$</span>open "$HOME/Library/Application Support/MacForge/runtime"</code>
+              <button class="copy" data-copy="open &quot;$HOME/Library/Application Support/MacForge/runtime&quot;" aria-label="Copy runtime folder command">copy</button>
+            </div>
+            <div class="term-row">
+              <code><span class="prompt">$</span>open "$HOME/Library/Caches/MacForge/clips"</code>
+              <button class="copy" data-copy="open &quot;$HOME/Library/Caches/MacForge/clips&quot;" aria-label="Copy trailer cache command">copy</button>
+            </div>
+          </div>
+          <p class="fine">
+            Bottles, the Wine tree and the trailer cache all sit in MacForge's own
+            folders. Nothing here needs Whisky installed, and nothing is shared
+            with its containers.
+          </p>
+        </article>
+
+        <article class="card span-7 reveal">
+          <p class="eyebrow">Session log</p>
+          <ol class="timeline">
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Wine 11.19 in MacForge's own folder</h3>
+                <p>The WhiskyWine tree, fetched into Application Support so no Whisky install is needed.</p>
+              </div>
+              <span class="tag">own</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Bottles moved into MacForge</h3>
+                <p>Renamed out of Whisky's containers in place, not copied; every game still reads from the new path.</p>
+              </div>
+              <span class="tag">move</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Steam installed</h3>
+                <p>Silent install, then a self-update to the current client.</p>
+              </div>
+              <span class="tag">silent</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>DXVK 2.7.1 payload</h3>
+                <p>Five DLLs per architecture, with the native overrides a bottle needs to render.</p>
+              </div>
+              <span class="tag">ready</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Enhanced Sync: ESync</h3>
+                <p>The loader no longer deadlocks behind <code>steam.exe</code>.</p>
+              </div>
+              <span class="tag">esync</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Crash reports on</h3>
+                <p>An unexpected exit is recorded with the log lines around it; a normal close is not.</p>
+              </div>
+              <span class="tag">on</span>
+            </li>
+            <li>
+              <span class="tick"></span>
+              <div>
+                <h3>Library reads Steam's manifests</h3>
+                <p>Installed games and the owned library come straight from <code>steamapps</code>.</p>
+              </div>
+              <span class="tag">scan</span>
+            </li>
+          </ol>
+        </article>
+
+        <article class="card span-5 reveal">
+          <p class="eyebrow">Bottles on this Mac</p>
+          <ul class="bottles">
+            <li class="is-current">
+              <div>
+                <h3>Steam bottle</h3>
+                <p id="bottles-summary">Windows 10 · Steam</p>
+              </div>
+              <span class="pill pill-mint">current</span>
+            </li>
+            <li>
+              <div>
+                <h3>Spare bottle</h3>
+                <p>Windows 10 · empty prefix · nothing installed</p>
+              </div>
+              <span class="pill pill-off">idle</span>
+            </li>
+          </ul>
+          <p class="fine">
+            MacForge reads every bottle it finds; one with no Steam install simply
+            shows no games. Nothing moves until you ask it to.
+          </p>
+        </article>
+      </section>
+    </main>
+
+    <footer>
+      <div>
+        <p class="foot-title">MacForge <span class="mono">1.0</span></p>
+        <p class="fine">
+          Apple silicon · arm64. A console for the bottles on this Mac.
+        </p>
+      </div>
+      <p class="fine foot-right">Wine 11.19 · DXVK on Metal.</p>
+    </footer>
+
+    <div class="launch" id="launch" hidden>
+      <div class="launch-bg" id="launch-bg" aria-hidden="true"></div>
+      <div class="launch-card">
+        <div class="launch-art" id="launch-art" aria-hidden="true"></div>
+        <div class="launch-body">
+          <p class="launch-name" id="launch-name"></p>
+          <div class="launch-bar is-running" id="launch-bar"><b></b></div>
+          <p class="launch-status" id="launch-status" role="status" aria-live="polite"></p>
+          <button class="btn btn-ghost launch-close" id="launch-close" type="button" hidden>Close</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
