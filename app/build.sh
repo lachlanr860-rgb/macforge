@@ -133,7 +133,11 @@ if [ "$DMG" = 1 ]; then
     exit 1
   fi
 
-  osascript <<'APPLESCRIPT'
+  # Finder writes the icon positions and the background into .DS_Store while
+  # the image is mounted read/write. A CI runner may have no scriptable Finder,
+  # which is not a reason to fail the build: the image still works, just with
+  # default icon positions.
+  if ! osascript <<'APPLESCRIPT'
     tell application "Finder"
       set deskBounds to bounds of window of desktop
       tell disk "MacForge"
@@ -164,6 +168,9 @@ if [ "$DMG" = 1 ]; then
       set selection to {}
     end tell
 APPLESCRIPT
+  then
+    echo "==> Finder layout skipped (no scriptable Finder); the image is built as is" >&2
+  fi
 
   if [ -f "$ICNS" ]; then
     cp "$ICNS" "$MOUNT/.VolumeIcon.icns"

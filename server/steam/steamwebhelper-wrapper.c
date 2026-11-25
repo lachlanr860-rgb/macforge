@@ -11,8 +11,10 @@
  * browser process also keeps the login request off Wine's winsock TLS path,
  * which otherwise fails with net_error -100/-107.
  *
- * The flags are prepended to every invocation: Steam starts this executable
- * once per CEF process, and each one needs them.
+ * The flags go to the browser process only. Steam also starts this executable
+ * for CEF sub-processes (--type=gpu-process, --type=utility, …); giving those
+ * --single-process as well would turn every child into another browser process
+ * and multiply without end, so they are passed to the real helper untouched.
  *
  * Build (Homebrew mingw-w64):
  *   x86_64-w64-mingw32-gcc -O2 -municode -DUNICODE -D_UNICODE -static \
@@ -113,13 +115,21 @@ static int run(void)
     const wchar_t *tail = args_tail();
     debug_log(L"[wrapper] args=%ls\n", tail);
 
-    size_t cap = wcslen(real) + wcslen(EXTRA_FLAGS) + wcslen(tail) + 8;
+    /*
+     * Children keep Chromium's own process type, and a relaunch that already
+     * carries the flags must not get them again: the browser restarts itself
+     * with its full current command line, so prepending unconditionally grew
+     * the line by two flags per generation until the machine filled up.
+     */
+    const wchar_t *flags = (wcsstr(tail, L"--type=") || wcsstr(tail, L"--single-process")) ? L"" : EXTRA_FLAGS;
+
+    size_t cap = wcslen(real) + wcslen(flags) + wcslen(tail) + 8;
     wchar_t *cmdline = (wchar_t *)calloc(cap, sizeof(wchar_t));
     if (!cmdline) {
         free(real);
         return 1;
     }
-    _snwprintf(cmdline, cap, L"\"%ls\" %ls %ls", real, EXTRA_FLAGS, tail);
+    _snwprintf(cmdline, cap, L"\"%ls\" %ls %ls", real, flags, tail);
     debug_log(L"[wrapper] exec=%ls\n", cmdline);
 
     STARTUPINFOW si;

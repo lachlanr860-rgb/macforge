@@ -13,7 +13,7 @@ import {
   OWN_BOTTLES,
 } from "./runtime.mjs";
 import { payloadSelfTest, payloadStatus, prepareBottle } from "./payloads.mjs";
-import { applySteamFix } from "./steam.mjs";
+import { applySteamFix, guardSteamLaunch, warmSteamCache, watchSteamLogin } from "./steam.mjs";
 import { listCrashes, logSince, readCrash, recordCrash, signalsIn } from "./crashes.mjs";
 import { migrateBottles, migrationPlan } from "./migrate.mjs";
 import { installRuntime, runtimeInstallStatus } from "./runtime-install.mjs";
@@ -354,6 +354,13 @@ async function runJob(job, game) {
     // own webhelper, so the sign-in fix is reapplied before every launch.
     const fixDir = bottleDirNamed(game.bottle);
     if (fixDir) {
+      if (!steamRunning()) {
+        try {
+          await warmSteamCache(fixDir);
+        } catch {
+          // A cold cache only costs the shim a warm-up; the guard still runs.
+        }
+      }
       try {
         await applySteamFix(fixDir);
       } catch {
@@ -1943,6 +1950,15 @@ async function runSteamSetup(job) {
       // A payload problem must not hide a working Steam install.
     }
 
+    // A cold interface cache is what makes the shim's helper loop, so a stock
+    // client builds it first and is closed again.
+    job.detail = "Building Steam's interface cache (one time)";
+    try {
+      await warmSteamCache(dir);
+    } catch {
+      // Without it the guard below is what stops a loop.
+    }
+
     // Steam's own sign-in window draws black under Wine here; the shim and its
     // overrides are what make it appear.
     job.detail = "Getting Steam's sign-in window ready";
@@ -1956,6 +1972,10 @@ async function runSteamSetup(job) {
     job.detail = "Opening Steam";
     const pid = wineLaunch(dir, steamExe);
     if (!pid) throw new Error("Steam is installed, but Wine could not open it");
+
+    // Step aside as soon as the sign-in succeeds, so Steam's own restart works.
+    watchSteamLogin(dir).catch(() => {});
+    guardSteamLaunch(dir).catch(() => {});
 
     job.state = "done";
     job.detail = "Steam is open. Sign in there once — your games will appear here.";
@@ -3389,6 +3409,14 @@ export async function handleApi(req, res) {
       return;
     }
 
+    // A cold interface cache makes the shim's helper loop, so warm it with a
+    // stock client first; this is a no-op for a bottle already warm.
+    try {
+      await warmSteamCache(installed.dir);
+    } catch {
+      // The launch guard is the backstop.
+    }
+
     // Steam's bootstrapper may have restored its own helper since the last
     // open, so the shim is checked again here rather than only at setup.
     try {
@@ -3402,6 +3430,11 @@ export async function handleApi(req, res) {
       sendJson(res, 500, { ok: false, error: "Wine could not open Steam" });
       return;
     }
+
+    // The shim only exists to draw the sign-in window. Once the logon succeeds
+    // Steam restarts itself, and that restart needs the stock client back.
+    watchSteamLogin(installed.dir).catch(() => {});
+    guardSteamLaunch(installed.dir).catch(() => {});
 
     sendJson(res, 200, { ok: true, bottle: installed.name, pid });
     return;
