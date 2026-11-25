@@ -164,9 +164,13 @@ own files):
   Steam's size check is satisfied.
 - `steam.cfg` carries `BootStrapperInhibitAll=enable` while Steam is signed out,
   so the client cannot copy its own helper back over the shim.
-- The helper gets Wine's **builtin** `dxgi`, `d3d11`, `d3d10core` and `d3d9`
-  through `HKCU\Software\Wine\AppDefaults\…`, because single-process CEF loads
-  DXGI in the browser process, where the bottle's DXVK `dxgi.dll` faults.
+- The helper **and `steam.exe`** get Wine's **builtin** `dxgi`, `d3d11`,
+  `d3d10core` and `d3d9` through `HKCU\Software\Wine\AppDefaults\…`, because
+  single-process CEF loads DXGI in the browser process, where the bottle's DXVK
+  `dxgi.dll` faults — and because the client loads that same DXVK `dxgi.dll`
+  when a logon completes, where it crashes (`DXGI.dll+0xd5f78`) a few seconds
+  into the session. That crash is what used to close Steam the moment you
+  signed in.
 
 The shim needs a warm CEF cache to work: `htmlcache` under
 `drive_c/users/<user>/AppData/Local/Steam` is where the client writes the login
@@ -177,13 +181,11 @@ client is opened just long enough to rebuild it, then closed, and only then are
 the shim and its inhibit installed. A warm bottle skips straight to the shim, and
 a signed-in or shim-disabled bottle skips the check entirely.
 
-The shim exists only to draw the sign-in window, so it goes away with it. Steam
-restarts its client after a successful logon, and that restart needs its own
-helper and a working bootstrapper — so the app watches `logs/steamui_login.txt`,
-and on the success line it restores the stock helper and removes the `steam.cfg`
-line before the restart happens. A bottle that is already signed in is left
-completely stock: the steps above only run while signed out. An earlier build
-held the inhibit permanently, and signing in there closed the window for good.
+The shim is what draws Steam's windows in this bottle, so it stays put across
+the sign-in: nothing is written over the helper while the browser has it mapped,
+and the library is drawn by the same CEF surface as the login page. Steam saves
+the account itself, in `config/loginusers.vdf`, and that is how the app knows a
+bottle is signed in and can stop asking for one.
 
 If the helper ever loops instead of starting — Steam respawning a helper that
 dies immediately — the app stops the bottle, puts the stock client back and

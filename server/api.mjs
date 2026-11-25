@@ -13,7 +13,7 @@ import {
   OWN_BOTTLES,
 } from "./runtime.mjs";
 import { payloadSelfTest, payloadStatus, prepareBottle } from "./payloads.mjs";
-import { applySteamFix, guardSteamLaunch, warmSteamCache, watchSteamLogin } from "./steam.mjs";
+import { applySteamFix, guardSteamLaunch, steamSignedIn, warmSteamCache } from "./steam.mjs";
 import { listCrashes, logSince, readCrash, recordCrash, signalsIn } from "./crashes.mjs";
 import { migrateBottles, migrationPlan } from "./migrate.mjs";
 import { installRuntime, runtimeInstallStatus } from "./runtime-install.mjs";
@@ -1259,6 +1259,9 @@ function librarySnapshot(names) {
     bottle: bottles[0]?.name ?? null,
     bottles: bottles.map((bottle) => bottle.name),
     steamInstalled: steamInstallBottles().length,
+    // Steam remembers the account in loginusers.vdf once a logon completes, so
+    // this is what tells the client there is nothing left to sign in to.
+    signedIn: bottles.some((bottle) => steamSignedIn(bottle.dir)),
     owned: ownedIds.size,
     pending: pendingIds.size,
     checking,
@@ -1973,8 +1976,8 @@ async function runSteamSetup(job) {
     const pid = wineLaunch(dir, steamExe);
     if (!pid) throw new Error("Steam is installed, but Wine could not open it");
 
-    // Step aside as soon as the sign-in succeeds, so Steam's own restart works.
-    watchSteamLogin(dir).catch(() => {});
+    // The shim stays for every launch, so nothing is swapped under the client
+    // when the sign-in lands; only a helper loop is worth stopping.
     guardSteamLaunch(dir).catch(() => {});
 
     job.state = "done";
@@ -3431,9 +3434,8 @@ export async function handleApi(req, res) {
       return;
     }
 
-    // The shim only exists to draw the sign-in window. Once the logon succeeds
-    // Steam restarts itself, and that restart needs the stock client back.
-    watchSteamLogin(installed.dir).catch(() => {});
+    // The client keeps the shim across the logon, so nothing is swapped under
+    // it when the sign-in lands; only a helper loop is worth stopping.
     guardSteamLaunch(installed.dir).catch(() => {});
 
     sendJson(res, 200, { ok: true, bottle: installed.name, pid });

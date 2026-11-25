@@ -2257,6 +2257,12 @@ footer .fine {
   background: rgba(255, 255, 255, 0.03);
 }
 
+/* `display: flex` above beats the browser's own [hidden] rule, so the card has
+   to opt out explicitly or it stays on screen after it has been hidden. */
+.migrate[hidden] {
+  display: none;
+}
+
 .migrate-text {
   margin: 0;
   max-width: 62ch;

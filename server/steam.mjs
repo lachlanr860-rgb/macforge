@@ -26,23 +26,24 @@ import { launch, run, runtime, wineEnv } from "./runtime.mjs";
  *      single-process mode CEF loads DXGI in the browser process, where DXVK's
  *      dxgi.dll faults on Wine 11 — the shim alone crashes there.
  *
- * The shim only has to exist until Steam is signed in: it exists to draw the
- * login window, and a signed-in client never shows one. That matters, because
- * a modified helper is fragile in two ways, both measured here:
+ *   3. The same builtin dxgi/d3d11/d3d10core/d3d9 for `steam.exe`. Once a
+ *      logon completes, the client loads the bottle's DXVK `dxgi.dll` and
+ *      faults inside it — `DXGI.dll+0xd5f78`, an access violation at 0x20, in
+ *      Steam's own crash dumps — so the window closed a few seconds after
+ *      every successful sign-in and nothing was saved. With the override the
+ *      client keeps running and the account it logged in with is written out.
+ *
+ * The shim is never swapped under a running client — rewriting the file the
+ * browser has mapped is what a sign-in must not do — and it stays installed
+ * after sign-in, because the library is drawn by the same CEF surface as the
+ * sign-in window. A modified helper is still fragile in two ways, both
+ * measured here:
  *
  *   · Steam's client restores its own helper within seconds of finding it
  *     changed, and its bootstrapper re-downloads the client when the size does
- *     not match. `steam.cfg` with `BootStrapperInhibitAll=enable` stops that,
- *     but it also stops the restart Steam performs *after a successful logon*,
- *     so the client closed and never came back — signing in appeared to kill
- *     the app, and nothing was saved, so the next launch asked to sign in again.
+ *     not match. `steam.cfg` with `BootStrapperInhibitAll=enable` stops that.
  *   · Leaving the shim read-only, or pasting it in mid-session, makes the client
  *     retry the helper endlessly (hundreds of steamwebhelper_real.exe).
- *
- * So the shim (and the inhibit) is installed only while Steam is signed out,
- * and is removed as soon as the log proves a logon succeeded — before Steam
- * restarts itself. From then on the client is stock, updates and restarts
- * behave, and the app drives the library without needing any window.
  */
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -54,17 +55,20 @@ const STEAM_DIRS = ["drive_c/Program Files (x86)/Steam", "drive_c/Program Files/
 const SHIM_SIZE_MAX = 1_000_000;
 
 const OVERRIDE_DLLS = ["dxgi", "d3d11", "d3d10core", "d3d9"];
-const OVERRIDE_EXES = ["steamwebhelper.exe", "steamwebhelper_real.exe"];
+
+// `steam.exe` as well as the helper. The client loads DXVK's dxgi when a logon
+// finishes and faults there; that crash is why signing in closed Steam.
+const OVERRIDE_EXES = ["steam.exe", "steamwebhelper.exe", "steamwebhelper_real.exe"];
 
 const MARKER = "drive_c/MacForge/steam-fix.json";
 
-// Written when the shim has been seen looping; from then on the client is left
-// stock, whatever the sign-in state.
+// Written when the shim has been seen looping: the client is left stock for a
+// while so a loop cannot repeat on every click. This is a cooldown, not a
+// verdict — see shimDisabled().
 const FIX_OFF = "drive_c/MacForge/steam-shim-disabled";
+const FIX_OFF_COOLDOWN_MS = 10 * 60_000;
 
 const INHIBIT = "BootStrapperInhibitAll=enable";
-
-const LOGON_RE = /Received logon success response/i;
 
 function sizeOf(file) {
   try {
@@ -92,6 +96,36 @@ function steamDir(prefix) {
 }
 
 /**
+ * Is the shim parked for this bottle right now? A trip parks it, but only for
+ * the cooldown: a stock client draws the black sign-in window, so a permanent
+ * marker would mean a permanent black screen for a bottle that was never
+ * looping. Once the cooldown has passed and no client is running, the marker is
+ * cleared and the next launch gets the shim again.
+ */
+async function shimDisabled(prefix) {
+  const file = path.join(prefix, FIX_OFF);
+  if (!existsSync(file)) return false;
+
+  let age = Number.POSITIVE_INFINITY;
+  try {
+    age = Date.now() - statSync(file).mtimeMs;
+  } catch {
+    // Unreadable is treated as old, so it is cleared below.
+  }
+  if (age < FIX_OFF_COOLDOWN_MS) return true;
+
+  // Clearing it under a running client would swap the helper mid-session.
+  if (await steamClientRunning()) return true;
+
+  try {
+    rmSync(file, { force: true });
+  } catch {
+    // Left for the next launch.
+  }
+  return false;
+}
+
+/**
  * Has this client signed in? Steam records the accounts it knows in
  * config/loginusers.vdf, one block per account, once a logon has completed.
  */
@@ -102,11 +136,19 @@ function signedIn(steam) {
   return /"AccountName"\s+"[^"]+"|"PersonaName"\s+"[^"]+"/i.test(users);
 }
 
-/** Does this file start with the shim's bytes and have the expected size? */
-function isShim(file, target) {
-  if (sizeOf(file) !== target) return false;
+/** Has this bottle signed in to Steam? Keeps the app from asking again. */
+export function steamSignedIn(prefix) {
+  const steam = steamDir(prefix);
+  return steam ? signedIn(steam) : false;
+}
+
+/** Does this file begin with the shim's own bytes, whatever its size? */
+function startsWithShim(file) {
+  if (!existsSync(file) || !existsSync(SHIM)) return false;
 
   const shim = readFileSync(SHIM);
+  if (sizeOf(file) < shim.length) return false;
+
   let head;
   try {
     const fd = openSync(file, "r");
@@ -119,6 +161,17 @@ function isShim(file, target) {
   return head.equals(shim);
 }
 
+/** Is the shim installed and the stock helper kept beside it? */
+function shimInPlace(cef) {
+  const real = path.join(cef, "steamwebhelper_real.exe");
+  return existsSync(real) && isShim(path.join(cef, "steamwebhelper.exe"), sizeOf(real));
+}
+
+/** Does this file start with the shim's bytes and have the expected size? */
+function isShim(file, target) {
+  return sizeOf(file) === target && startsWithShim(file);
+}
+
 /**
  * Put the shim in place, padded to the size of the real helper so Steam's size
  * check is satisfied even after the inhibit is lifted.
@@ -129,7 +182,13 @@ function installShim(cef) {
 
   if (!existsSync(SHIM)) return { ok: false, detail: "the shim is missing from the app bundle" };
 
-  if (sizeOf(helper) > SHIM_SIZE_MAX) {
+  // The shim is padded to the real helper's size, so a size test alone calls an
+  // installed shim a stock helper. Filing it away as `steamwebhelper_real.exe`
+  // leaves the shim launching a copy of itself: Steam's helper dies at once,
+  // the client respawns it, and the bottle fills with helpers.
+  const helperIsShim = startsWithShim(helper);
+
+  if (!helperIsShim && sizeOf(helper) > SHIM_SIZE_MAX) {
     try {
       chmodSync(helper, 0o644);
       rmSync(real, { force: true });
@@ -162,7 +221,19 @@ function restoreStock(cef) {
   const real = path.join(cef, "steamwebhelper_real.exe");
 
   if (!existsSync(real)) return false;
-  if (sizeOf(helper) === sizeOf(real) && isShim(helper, sizeOf(real)) === false) {
+
+  // A shim saved under the real helper's name is not a stock helper; putting
+  // it back would only rebuild the loop it came from.
+  if (startsWithShim(real)) {
+    try {
+      rmSync(real, { force: true });
+    } catch {
+      // Left for Steam's own file check.
+    }
+    return false;
+  }
+
+  if (sizeOf(helper) === sizeOf(real) && !startsWithShim(helper)) {
     // Same size and not the shim: already stock.
     return false;
   }
@@ -236,11 +307,17 @@ async function installOverrides(prefix) {
     : { ok: false, done: 0, failed: [(result.stderr || result.stdout || "reg import failed").trim().slice(0, 200)] };
 }
 
-/** Has this prefix already been given the overrides, for this shim? */
+/** Has this prefix already been given these overrides, for this shim? */
 function markerMatches(prefix) {
   try {
     const mark = JSON.parse(readFileSync(path.join(prefix, MARKER), "utf8"));
-    return mark?.shim === sizeOf(SHIM) && Array.isArray(mark.dlls) && mark.dlls.length === OVERRIDE_DLLS.length;
+    return (
+      mark?.shim === sizeOf(SHIM) &&
+      Array.isArray(mark.dlls) &&
+      mark.dlls.length === OVERRIDE_DLLS.length &&
+      Array.isArray(mark.exes) &&
+      OVERRIDE_EXES.every((exe) => mark.exes.includes(exe))
+    );
   } catch {
     return false;
   }
@@ -250,10 +327,22 @@ function writeMarker(prefix) {
   try {
     const file = path.join(prefix, MARKER);
     mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, JSON.stringify({ shim: sizeOf(SHIM), dlls: OVERRIDE_DLLS, at: new Date().toISOString() }));
+    writeFileSync(
+      file,
+      JSON.stringify({ shim: sizeOf(SHIM), dlls: OVERRIDE_DLLS, exes: OVERRIDE_EXES, at: new Date().toISOString() }),
+    );
   } catch {
     // Bookkeeping only.
   }
+}
+
+/** The overrides, imported once per shim unless the set has changed since. */
+async function ensureOverrides(prefix) {
+  if (markerMatches(prefix)) return { ok: true, done: 0, failed: [], cached: true };
+
+  const installed = await installOverrides(prefix);
+  if (installed.ok) writeMarker(prefix);
+  return { ...installed, cached: false };
 }
 
 /**
@@ -267,36 +356,38 @@ export async function applySteamFix(prefix) {
   const cef = path.join(steam, "bin", "cef", "cef.win64");
   if (!existsSync(cef)) return { ok: false, detail: "Steam's CEF folder is not there yet" };
 
-  // A bottle where the shim looped stays stock: a stock client that draws
-  // nothing is better than one that spawns helpers without end.
-  if (existsSync(path.join(prefix, FIX_OFF))) {
+  // The client loads DXVK's dxgi whether or not the shim is in use — that is
+  // the crash that closed Steam right after a logon — so the overrides are
+  // installed for every launch, signed in or not.
+  const overrides = await ensureOverrides(prefix);
+
+  // A bottle where the shim looped stays stock for the cooldown: a stock
+  // client that draws nothing is better than one that spawns helpers without
+  // end. After the cooldown the shim is retried, so a false trip cannot leave
+  // the window black for good.
+  if (await shimDisabled(prefix)) {
     restoreStock(cef);
     setInhibit(steam, false);
-    return { ok: true, changed: false, shim: false, cfgCleared: false, overrides: 0, detail: "stock client (shim disabled for this bottle)" };
-  }
-
-  // Signed in: the login window is gone for good, so leave the client stock.
-  if (signedIn(steam)) {
-    const restored = restoreStock(cef);
-    const cfgCleared = setInhibit(steam, false);
     return {
       ok: true,
-      changed: restored || cfgCleared,
+      changed: Boolean(overrides.done),
       shim: false,
-      cfgCleared,
-      overrides: 0,
-      detail: restored || cfgCleared ? "signed in; stock helper restored" : "signed in; stock client",
+      cfgCleared: false,
+      overrides: overrides.done ?? 0,
+      detail: "stock client (shim disabled for this bottle)",
     };
+  }
+
+  // The shim cannot be swapped under a running helper: Steam keeps its own
+  // process and re-reads the file, which is the loop the shim exists to avoid.
+  // Nothing is stopped when the shim is already in place, so opening a game
+  // never takes a running client — or the game — down with it.
+  if (!shimInPlace(cef) && (await steamClientRunning())) {
+    await stopPrefix(prefix);
   }
 
   const shim = installShim(cef);
   const cfg = setInhibit(steam, true);
-
-  let overrides = { ok: true, done: 0, failed: [], cached: true };
-  if (!markerMatches(prefix)) {
-    overrides = { ...(await installOverrides(prefix)), cached: false };
-    if (overrides.ok) writeMarker(prefix);
-  }
 
   const parts = [shim.detail];
   if (cfg) parts.push("bootstrapper held");
@@ -425,7 +516,7 @@ export async function warmSteamCache(prefix, { minBytes = NEARLY_EMPTY, timeoutM
 
   // A stock client builds its cache without help, and the shim that needs a
   // warm one is never installed for a signed-in or shim-disabled bottle.
-  if (signedIn(steam) || existsSync(path.join(prefix, FIX_OFF))) {
+  if (signedIn(steam) || (await shimDisabled(prefix))) {
     return { ok: true, warmed: false, bytes: before, detail: "stock client; no warm-up needed" };
   }
 
@@ -483,14 +574,24 @@ function countHelpers() {
  * own helper back and disable the shim for this bottle for good. Resolves with
  * what it saw, or null if the launch looked healthy.
  */
-export function guardSteamLaunch(prefix, { limit = 12, intervalMs = 5_000, watchMs = 120_000 } = {}) {
+export async function guardSteamLaunch(prefix, { limit = 12, intervalMs = 5_000, watchMs = 120_000 } = {}) {
+  // Helpers are counted for the whole Mac, because a Wine process does not name
+  // its bottle on the command line. Whatever is already running when the launch
+  // starts — a second client, another bottle — is therefore the baseline, and
+  // only growth beyond it can be this launch looping.
+  const baseline = await countHelpers();
   const startedAt = Date.now();
 
   return new Promise((resolve) => {
+    let over = 0;
     const timer = setInterval(async () => {
       const count = await countHelpers();
 
-      if (count > limit) {
+      // Two samples over the limit, so a burst of helpers building the cache is
+      // not mistaken for a loop that never ends.
+      over = count > baseline + limit ? over + 1 : 0;
+
+      if (over >= 2) {
         clearInterval(timer);
 
         const rt = runtime();
@@ -511,7 +612,7 @@ export function guardSteamLaunch(prefix, { limit = 12, intervalMs = 5_000, watch
         try {
           const file = path.join(prefix, FIX_OFF);
           mkdirSync(path.dirname(file), { recursive: true });
-          writeFileSync(file, `${new Date().toISOString()} webhelper processes: ${count}\n`);
+          writeFileSync(file, `${new Date().toISOString()} webhelper processes: ${count} (baseline ${baseline})\n`);
         } catch {
           // Bookkeeping only.
         }
@@ -528,53 +629,3 @@ export function guardSteamLaunch(prefix, { limit = 12, intervalMs = 5_000, watch
   });
 }
 
-/**
- * Watch the client's login log and step out of its way the moment a logon
- * succeeds: Steam restarts itself a few seconds later, and the restart needs
- * its own helper and a working bootstrapper. Resolves with what it did, or
- * null if nothing happened before the timeout.
- */
-export function watchSteamLogin(prefix, { timeoutMs = 15 * 60_000, intervalMs = 1_500 } = {}) {
-  const steam = steamDir(prefix);
-  if (!steam) return Promise.resolve(null);
-
-  const file = path.join(steam, "logs", "steamui_login.txt");
-  const cef = path.join(steam, "bin", "cef", "cef.win64");
-  let offset = sizeOf(file);
-  const startedAt = Date.now();
-
-  return new Promise((resolve) => {
-    const timer = setInterval(() => {
-      // Only read what was appended since the last look.
-      const size = sizeOf(file);
-      if (size < offset) offset = 0;
-
-      if (size > offset) {
-        let chunk = "";
-        try {
-          const fd = openSync(file, "r");
-          const buffer = Buffer.alloc(size - offset);
-          readSync(fd, buffer, 0, buffer.length, offset);
-          closeSync(fd);
-          chunk = buffer.toString("utf8");
-        } catch {
-          chunk = "";
-        }
-        offset = size;
-
-        if (LOGON_RE.test(chunk)) {
-          clearInterval(timer);
-          setInhibit(steam, false);
-          const restored = restoreStock(cef);
-          resolve({ loggedIn: true, restored });
-          return;
-        }
-      }
-
-      if (Date.now() - startedAt > timeoutMs) {
-        clearInterval(timer);
-        resolve(null);
-      }
-    }, intervalMs);
-  });
-}

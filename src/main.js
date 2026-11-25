@@ -188,7 +188,12 @@ function tileFor(game, index) {
 }
 
 function updateEmptyStage() {
-  if (steamInstalled) {
+  if (steamInstalled && steamSignedIn) {
+    // Signed in with nothing installed: the library below is the next step, so
+    // the stage must not keep asking for the sign-in that already happened.
+    stageTitle.textContent = "Nothing installed yet";
+    stageMeta.textContent = "Pick a game from your library below and press Download — it installs into this bottle.";
+  } else if (steamInstalled) {
     stageTitle.textContent = "No games in your bottles yet";
     stageMeta.textContent =
       "Open Steam below and sign in — your library appears here once you're in.";
@@ -532,6 +537,8 @@ let multiBottle = false;
 const dismissedSetup = new Set();
 
 let libraryGames = [];
+let steamSignedIn = false;
+let signInPoll = null;
 let librarySignature = "";
 let libraryRetry;
 let libraryPolls = 0;
@@ -1351,7 +1358,11 @@ async function loadLibrary() {
     libraryGames = Array.isArray(data.games) ? data.games : [];
     multiBottle = (data.bottles ?? []).length > 1;
     steamInstalled = (data.steamInstalled ?? 0) > 0;
-    showSteamSetup(steamInstalled, libraryGames.length > 0);
+    steamSignedIn = data.signedIn === true;
+    showSteamSetup(steamInstalled, libraryGames.length > 0, steamSignedIn);
+    // The stage is painted before this answer arrives, so its wording is redone
+    // here once the account state is known.
+    if (!games.length) updateEmptyStage();
     if (!games.length) updateEmptyStage();
     const installed = libraryGames.filter((game) => game.installed).length;
     // Steam's install state is polled while anything is downloading, so the
@@ -1643,7 +1654,7 @@ function steamSetupButton(label, action) {
   steamSetupRun.textContent = label;
 }
 
-function showSteamSetup(installed, hasGames) {
+function showSteamSetup(installed, hasGames, signedIn) {
   if (!steamSetupEl) return;
   // A running job owns the card's text until it finishes.
   if (steamSetupId || steamSetupRun?.disabled) return;
@@ -1656,12 +1667,20 @@ function showSteamSetup(installed, hasGames) {
     return;
   }
 
+  // Steam has the account saved, so there is nothing left to ask for — even
+  // when the account owns no games for the library to list yet.
+  if (signedIn) {
+    steamSetupEl.hidden = true;
+    return;
+  }
+
   // Installed but not signed in: Steam has no library cache to show yet.
   if (!hasGames) {
     steamSetupEl.hidden = false;
     steamSetupText.textContent =
       "Steam is installed. Sign in there once — your games will appear here when you're in.";
     steamSetupButton("Open Steam", "open");
+    pollForSignIn();
     return;
   }
 
@@ -1674,7 +1693,27 @@ function followSteamSignIn() {
   const timer = setInterval(async () => {
     attempts += 1;
     await Promise.all([loadGames(), loadLibrary()]);
-    if (libraryGames.length || attempts >= 60) clearInterval(timer);
+    if (steamSignedIn || libraryGames.length || attempts >= 60) clearInterval(timer);
+  }, 5_000);
+}
+
+/**
+ * The sign-in happens in Steam's own window, which this page cannot see: the
+ * client writes `config/loginusers.vdf` and its library cache when it is done.
+ * So while the card is asking for a sign-in, look again every few seconds —
+ * otherwise a sign-in that lands after the page loaded is never noticed.
+ */
+function pollForSignIn() {
+  if (signInPoll) return;
+
+  let attempts = 0;
+  signInPoll = setInterval(async () => {
+    attempts += 1;
+    await Promise.all([loadGames(), loadLibrary()]);
+    if (steamSignedIn || attempts >= 180) {
+      clearInterval(signInPoll);
+      signInPoll = null;
+    }
   }, 5_000);
 }
 
