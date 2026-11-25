@@ -13,6 +13,7 @@ import {
   OWN_BOTTLES,
 } from "./runtime.mjs";
 import { payloadSelfTest, payloadStatus, prepareBottle } from "./payloads.mjs";
+import { applySteamFix } from "./steam.mjs";
 import { listCrashes, logSince, readCrash, recordCrash, signalsIn } from "./crashes.mjs";
 import { migrateBottles, migrationPlan } from "./migrate.mjs";
 import { installRuntime, runtimeInstallStatus } from "./runtime-install.mjs";
@@ -349,6 +350,17 @@ function steamReadySince(log, since) {
  */
 async function runJob(job, game) {
   try {
+    // Booting Steam for a game opens its client too, and Steam self-heals its
+    // own webhelper, so the sign-in fix is reapplied before every launch.
+    const fixDir = bottleDirNamed(game.bottle);
+    if (fixDir) {
+      try {
+        await applySteamFix(fixDir);
+      } catch {
+        // A launch is not worth failing over the sign-in window.
+      }
+    }
+
     const log = steamBottleLog();
     const since = stampNow();
     const wasRunning = steamRunning();
@@ -1931,6 +1943,15 @@ async function runSteamSetup(job) {
       // A payload problem must not hide a working Steam install.
     }
 
+    // Steam's own sign-in window draws black under Wine here; the shim and its
+    // overrides are what make it appear.
+    job.detail = "Getting Steam's sign-in window ready";
+    try {
+      await applySteamFix(dir);
+    } catch {
+      // Steam still opens without it — only the window would stay black.
+    }
+
     job.state = "launching";
     job.detail = "Opening Steam";
     const pid = wineLaunch(dir, steamExe);
@@ -3366,6 +3387,14 @@ export async function handleApi(req, res) {
     if (!installed) {
       sendJson(res, 404, { ok: false, error: "Steam is not installed in a bottle yet" });
       return;
+    }
+
+    // Steam's bootstrapper may have restored its own helper since the last
+    // open, so the shim is checked again here rather than only at setup.
+    try {
+      await applySteamFix(installed.dir);
+    } catch {
+      // Opening Steam is still worth doing without the shim.
     }
 
     const pid = wineLaunch(installed.dir, installed.exe);

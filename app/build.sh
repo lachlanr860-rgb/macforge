@@ -99,12 +99,84 @@ if [ "$DMG" = 1 ]; then
   mkdir -p dist
   STAGE="build/dmg"
   rm -rf "$STAGE"
-  mkdir -p "$STAGE"
+  mkdir -p "$STAGE/.background"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
+  if [ -f app/dmg-background.png ]; then
+    cp app/dmg-background.png "$STAGE/.background/background.png"
+  fi
+
+  # Finder only stores icon positions and the background in .DS_Store, which is
+  # written while the image is mounted read/write. The final image is a
+  # compressed copy of that laid-out volume.
+  RW="build/MacForge-rw.dmg"
+  MOUNT="/Volumes/MacForge"
   OUT="dist/MacForge-$VERSION.dmg"
-  rm -f "$OUT"
-  hdiutil create -volname "MacForge" -srcfolder "$STAGE" -ov -format UDZO "$OUT" >/dev/null
+  rm -f "$RW" "$OUT"
+
+  cleanup_dmg() {
+    hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
+  }
+  trap cleanup_dmg EXIT
+
+  if [ -d /Volumes/MacForge ]; then
+    hdiutil detach -force /Volumes/MacForge >/dev/null 2>&1 || {
+      echo "Eject the mounted MacForge volume before building the disk image." >&2
+      exit 1
+    }
+  fi
+
+  hdiutil create -volname "MacForge" -srcfolder "$STAGE" -ov -format UDRW -fs HFS+ "$RW" >/dev/null
+  hdiutil attach "$RW" -nobrowse -readwrite >/dev/null
+  if [ ! -d "$MOUNT" ]; then
+    echo "Could not mount the disk image at $MOUNT." >&2
+    exit 1
+  fi
+
+  osascript <<'APPLESCRIPT'
+    tell application "Finder"
+      set deskBounds to bounds of window of desktop
+      tell disk "MacForge"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+
+        set winWidth to 700
+        set winHeight to 460
+        set leftPos to round (((item 3 of deskBounds) - winWidth) / 2)
+        set topPos to round (((item 4 of deskBounds) - winHeight) / 2)
+        set the bounds of container window to {leftPos, topPos, leftPos + winWidth, topPos + winHeight}
+
+        set opts to the icon view options of container window
+        set arrangement of opts to not arranged
+        set icon size of opts to 128
+        set text size of opts to 13
+        set color of opts to {65535, 65535, 65535}
+        set background picture of opts to file ".background:background.png"
+
+        set position of item "MacForge.app" of container window to {180, 216}
+        set position of item "Applications" of container window to {520, 216}
+        update without registering applications
+        delay 1
+        close
+      end tell
+      set selection to {}
+    end tell
+APPLESCRIPT
+
+  if [ -f "$ICNS" ]; then
+    cp "$ICNS" "$MOUNT/.VolumeIcon.icns"
+    SetFile -a C "$MOUNT" >/dev/null 2>&1 || true
+    echo "==> volume icon added"
+  fi
+
+  sync
+  sleep 1
+  hdiutil detach "$MOUNT" >/dev/null
+  hdiutil convert "$RW" -format UDZO -imagekey zlib-level=9 -o "$OUT" >/dev/null
+  rm -f "$RW"
+  trap - EXIT
   codesign --force --sign - "$OUT" >/dev/null 2>&1 || true
   rm -rf "$STAGE"
   echo "==> disk image: $OUT ($(du -h "$OUT" | cut -f1))"
